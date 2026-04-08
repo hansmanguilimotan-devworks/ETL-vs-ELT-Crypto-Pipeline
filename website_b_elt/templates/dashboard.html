@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+          {{ message }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="row align-items-center mb-4">
+    <div class="col-md-8">
+      <h1 class="h2 mb-1">Dashboard</h1>
+      <p class="text-secondary mb-0">
+        Live metrics from SQLite after the <span class="badge rounded-pill badge-pipeline">{{ pipeline_mode }}</span>
+        pipeline. Raw API strings go to <code>staging_assets</code>; <code>INSERT INTO production_data SELECT …</code> cleans and rounds in SQL.
+      </p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+      <form action="{{ url_for('sync') }}" method="post">
+        <button type="submit" class="btn btn-primary">
+          Run Pipeline
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <div class="text-secondary small text-uppercase">Production rows</div>
+          <div class="kpi-value accent">{{ row_count }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <div class="text-secondary small text-uppercase">Staging rows</div>
+          <div class="kpi-value accent">{{ staging_count }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <div class="text-secondary small text-uppercase">Live status</div>
+          <div class="kpi-value fs-6 lh-lg">
+            {% if api_status == "Connected" %}
+              <span class="badge text-bg-success">Connected</span>
+            {% else %}
+              <span class="badge text-bg-warning">Fallback Data</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <div class="text-secondary small text-uppercase">Last SQL transform</div>
+          <div class="kpi-value text-light fs-6 lh-lg">
+            {{ last_updated or "Never — run the pipeline to load data." }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-5">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <h2 class="h5 mb-3">Top coins — market share</h2>
+          <p class="small text-secondary">
+            Chart.js pie from the <code>production_data</code> table (rounded price &amp; share % from SQL).
+          </p>
+          <div style="max-width: 420px; margin: 0 auto;">
+            <canvas id="shareChart" height="260"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="card card-panel h-100">
+        <div class="card-body">
+          <h2 class="h5 mb-3">Asset catalog</h2>
+          <p class="small text-secondary mb-3">
+            Searchable table (DataTables). Rounding and market-share % come from the SQL transform step.
+          </p>
+          <div class="table-responsive">
+            <table
+              id="assetsTable"
+              class="table table-striped table-hover table-sm align-middle"
+              style="width:100%"
+            >
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Symbol</th>
+                  <th>Name</th>
+                  <th>Price (USD)</th>
+                  <th>Mkt cap (USD)</th>
+                  <th>Market share %</th>
+                  <th>Vol 24h</th>
+                  <th>Batch</th>
+                  <th>Transformed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in table_rows %}
+                  <tr>
+                    <td>{{ row.rank_num }}</td>
+                    <td>{{ row.symbol }}</td>
+                    <td>{{ row.name }}</td>
+                    <td>{{ "%.2f"|format(row.price_usd) }}</td>
+                    <td>{{ "%.0f"|format(row.market_cap_usd) }}</td>
+                    <td>{{ "%.2f"|format(row.market_share_pct) }}</td>
+                    <td>
+                      {% if row.volume_24h_usd is not none %}
+                        {{ "%.2f"|format(row.volume_24h_usd) }}
+                      {% else %}—{% endif %}
+                    </td>
+                    <td><code class="small">{{ row.batch_id }}</code></td>
+                    <td>{{ row.transformed_at }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const chartLabels = {{ chart_labels | tojson }};
+    const chartValues = {{ chart_values | tojson }};
+    const palette = [
+      "#93c5fd", "#a5b4fc", "#f0abfc", "#fdba74", "#fde047",
+      "#86efac", "#67e8f9", "#c4b5fd", "#fca5a5", "#cbd5e1", "#94a3b8"
+    ];
+    const colors = chartLabels.map((_, i) => palette[i % palette.length]);
+    const ctx = document.getElementById("shareChart");
+    if (ctx && chartLabels.length) {
+      new Chart(ctx, {
+        type: "pie",
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            data: chartValues,
+            backgroundColor: colors,
+            borderWidth: 1
+          }]
+        },
+        options: {
+          plugins: {
+            title: {
+              display: true,
+              text: "Market share % (top coins)",
+              color: "#e2e8f0",
+              font: { size: 14 }
+            },
+            legend: { position: "bottom", labels: { color: "#cbd5e1" } }
+          }
+        }
+      });
+    }
+    $(function () {
+      $("#assetsTable").DataTable({
+        pageLength: 10,
+        order: [[0, "asc"]]
+      });
+    });
+  </script>
+{% endblock %}
